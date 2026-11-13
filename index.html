@@ -1,0 +1,550 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="description" content="Combine PDFs into one file, with each file's name printed in bold at the top of its first page.">
+<title>Dr. Staub / Claude PDF Combiner</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Montserrat:wght@600;700;800&family=Open+Sans:wght@400;500;600&display=swap">
+<style>
+html { color-scheme: light; }
+:root { padding-top: env(safe-area-inset-top, 0px); padding-bottom: env(safe-area-inset-bottom, 0px); }
+body { margin: 0; }
+img { max-width: 100%; }
+[hidden] { display: none !important; }
+/* Layout: one centered work column; drop zone, then an ordered stack of file rows, then a sticky action bar. */
+:root {
+  --bg: #f5f7fb;
+  --surface: #ffffff;
+  --ink: #16213a;
+  --muted: #5d6882;
+  --line: #dde3ee;
+  --accent: #2456d6;
+  --accent-ink: #ffffff;
+  --accent-soft: #e7eefc;
+  --danger: #b4232f;
+  --danger-soft: #fdecee;
+  --ok: #17794a;
+  --font-display: "Montserrat", "Segoe UI", system-ui, sans-serif;
+  --font-body: "Open Sans", "Segoe UI", system-ui, sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0f1422; --surface: #171e30; --ink: #e8ecf6; --muted: #9aa5bf; --line: #2a3450;
+    --accent: #6f97ff; --accent-ink: #0b1020; --accent-soft: #1e2a4a; --danger: #ff7b86; --danger-soft: #3a1c22; --ok: #56d39a;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0f1422; --surface: #171e30; --ink: #e8ecf6; --muted: #9aa5bf; --line: #2a3450;
+  --accent: #6f97ff; --accent-ink: #0b1020; --accent-soft: #1e2a4a; --danger: #ff7b86; --danger-soft: #3a1c22; --ok: #56d39a;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body {
+  background: var(--bg); color: var(--ink); font-family: var(--font-body); font-size: 15px; line-height: 1.5;
+}
+.wrap {
+  max-width: 760px; margin: 0 auto;
+  padding-block: 32px 120px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  display: flex; flex-direction: column; gap: 20px;
+}
+h1 { font-family: var(--font-display); font-weight: 800; font-size: 1.9rem; letter-spacing: -0.01em; margin: 0; text-wrap: balance; }
+.lede { margin: 6px 0 0; color: var(--muted); max-width: 62ch; }
+.lede strong { color: var(--ink); }
+
+.drop {
+  border: 2px dashed var(--line); border-radius: 14px; background: var(--surface);
+  padding: 28px 20px; text-align: center; cursor: pointer;
+  display: flex; flex-direction: column; align-items: center; gap: 8px;
+  transition: border-color .15s, background .15s;
+}
+.drop:hover, .drop:focus-visible, .drop.over { border-color: var(--accent); background: var(--accent-soft); outline: none; }
+.drop-title { font-family: var(--font-display); font-weight: 700; font-size: 1.1rem; }
+.drop-sub { color: var(--muted); font-size: .9rem; }
+.btn {
+  font: 600 .95rem var(--font-body); border-radius: 9px; padding: 10px 18px; cursor: pointer;
+  border: 1px solid var(--line); background: var(--surface); color: var(--ink);
+}
+.btn:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+.btn.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.btn.primary:disabled { opacity: .45; cursor: not-allowed; }
+.btn.small { padding: 6px 12px; font-size: .85rem; }
+.btn.link { border: none; background: none; color: var(--muted); padding: 6px 4px; text-decoration: underline; }
+
+.section-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+.section-head h2 { font-family: var(--font-display); font-size: .8rem; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin: 0; }
+.totals { color: var(--muted); font-size: .9rem; font-variant-numeric: tabular-nums; }
+
+.list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.item {
+  background: var(--surface); border: 1px solid var(--line); border-radius: 12px;
+  padding: 12px 12px 12px 6px; display: grid; grid-template-columns: 28px 1fr auto; gap: 10px; align-items: start;
+}
+.item.dragging { opacity: .5; }
+.item.drop-before { box-shadow: 0 -3px 0 var(--accent); }
+.item.drop-after { box-shadow: 0 3px 0 var(--accent); }
+.item.bad { border-color: var(--danger); background: var(--danger-soft); }
+.handle {
+  cursor: grab; color: var(--muted); display: flex; justify-content: center; padding-top: 30px; user-select: none;
+}
+.handle svg { width: 14px; height: 22px; fill: currentColor; }
+.body { min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.label { font-size: .75rem; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+.header-input {
+  width: 100%; font: 700 1.05rem Arial, "Helvetica Neue", Helvetica, sans-serif; color: var(--ink);
+  background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px;
+}
+.header-input:focus { outline: 2px solid var(--accent); outline-offset: 0; border-color: var(--accent); }
+.meta { font-size: .85rem; color: var(--muted); display: flex; flex-wrap: wrap; gap: 4px 14px; overflow-wrap: anywhere; }
+.meta .pages { font-variant-numeric: tabular-nums; }
+.pill { display: inline-block; font-size: .78rem; font-weight: 600; padding: 1px 8px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); font-variant-numeric: tabular-nums; }
+.warn { color: var(--danger); font-size: .85rem; font-weight: 600; }
+.actions { display: flex; flex-direction: column; gap: 4px; }
+.icon-btn {
+  width: 34px; height: 30px; border-radius: 7px; border: 1px solid var(--line); background: var(--surface); color: var(--muted);
+  cursor: pointer; display: grid; place-items: center; padding: 0;
+}
+.icon-btn:hover { color: var(--ink); border-color: var(--muted); }
+.icon-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.icon-btn:disabled { opacity: .3; cursor: default; }
+.icon-btn svg { width: 14px; height: 14px; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.icon-btn.remove:hover { color: var(--danger); border-color: var(--danger); }
+
+.empty {
+  background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 20px;
+  display: grid; grid-template-columns: auto 1fr; gap: 20px; align-items: center;
+}
+.empty p { margin: 0; color: var(--muted); max-width: 52ch; }
+.empty strong { color: var(--ink); }
+.mini-pages { display: flex; gap: 6px; }
+.mini {
+  width: 44px; height: 57px; border-radius: 3px; border: 1px solid var(--line); background: var(--bg);
+  display: flex; flex-direction: column; align-items: center; padding-top: 6px; gap: 3px; position: relative;
+}
+.mini b { font: 700 7px Arial, sans-serif; color: var(--accent); }
+.mini i { display: block; width: 28px; height: 2px; background: var(--line); }
+.mini .num { position: absolute; bottom: -18px; font: 600 .7rem var(--font-body); color: var(--muted); }
+.mini.blank { padding-top: 15px; }
+
+.bar {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 5;
+  background: var(--surface); border-top: 1px solid var(--line);
+  padding-top: 12px; padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
+}
+.bar-inner { max-width: 760px; margin: 0 auto; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+.name-field { flex: 1 1 220px; min-width: 0; display: flex; align-items: center; gap: 8px; }
+.name-field label { font-size: .85rem; color: var(--muted); white-space: nowrap; }
+.name-field input {
+  flex: 1; min-width: 0; font: 500 .95rem var(--font-body); color: var(--ink); background: var(--bg);
+  border: 1px solid var(--line); border-radius: 8px; padding: 9px 10px;
+}
+.name-field input:focus { outline: 2px solid var(--accent); border-color: var(--accent); }
+.status { font-size: .88rem; color: var(--muted); width: 100%; min-height: 1.2em; }
+.status.error { color: var(--danger); font-weight: 600; }
+.status.good { color: var(--ok); font-weight: 600; }
+.note { font-size: .82rem; color: var(--muted); margin: 0; }
+
+@media (max-width: 520px) {
+  h1 { font-size: 1.5rem; }
+  .empty { grid-template-columns: 1fr; }
+  .bar-inner .btn.primary { width: 100%; }
+}
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+</head>
+<body>
+
+<div class="wrap">
+  <header>
+    <h1>Dr. Staub / Claude PDF Combiner</h1>
+    <p class="lede">Add your PDFs, put them in order, and download one combined file. Each file's name is printed in <strong>bold</strong>, centered at the top of its first page. You can change any header before you combine.</p>
+  </header>
+
+  <div class="drop" id="drop" tabindex="0" role="button" aria-label="Add PDF files">
+    <span class="drop-title">Drop PDFs here</span>
+    <span class="drop-sub">or click to choose files. JPG and PNG images work too.</span>
+    <input type="file" id="file-input" accept="application/pdf,.pdf,image/jpeg,image/png" multiple hidden>
+  </div>
+
+  <section id="files-section" aria-labelledby="files-h">
+    <div class="section-head" style="margin-bottom:10px">
+      <h2 id="files-h">Files, in order</h2>
+      <span class="totals" id="totals"></span>
+    </div>
+
+    <div class="empty" id="empty">
+      <div class="mini-pages" aria-hidden="true" style="padding-bottom:18px">
+        <div class="mini"><b>Essay</b><i></i><i></i><i></i><span class="num">p. 1</span></div>
+        <div class="mini blank"><i></i><i></i><i></i><span class="num">p. 2</span></div>
+        <div class="mini"><b>Lab Report</b><i></i><i></i><i></i><span class="num">p. 3</span></div>
+      </div>
+      <p><strong>No files yet.</strong> Combining a 2-page file named "Essay" with a file named "Lab Report" gives a header on page 1 and page 3 only. Every other page stays as it was.</p>
+    </div>
+
+    <ol class="list" id="list"></ol>
+    <p class="note" id="reorder-note" hidden style="margin-top:10px">Drag the grip on the left, or use the arrows, to change the order. Clear a header box to leave that file without a header.</p>
+  </section>
+</div>
+
+<div class="bar">
+  <div class="bar-inner">
+    <div class="name-field">
+      <label for="out-name">Save as</label>
+      <input id="out-name" type="text" value="Combined" spellcheck="false" autocomplete="off">
+    </div>
+    <button class="btn link" id="clear-btn" type="button" hidden>Remove all</button>
+    <button class="btn primary" id="combine-btn" type="button" disabled>Combine &amp; Download</button>
+    <div class="status" id="status" role="status" aria-live="polite">Files stay on this device. Nothing is uploaded.</div>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
+<script>
+const { PDFDocument, StandardFonts, rgb, degrees } = PDFLib;
+
+const HEADER_SIZE = 16;          // pt
+const HEADER_TOP = 36;           // 0.5 inch, in points, from top edge to top of capital letters
+const SIDE_MARGIN = 36;          // keep long headers 0.5 inch from each side
+const MIN_SIZE = 9;              // shrink long headers no smaller than this
+const CAP_HEIGHT = 0.718;        // Helvetica-Bold cap height (same metrics as Arial Bold)
+const LETTER = [612, 792];
+
+let items = [];   // { id, file, name, header, kind, pages, doc, error, encrypted }
+let nextId = 1;
+let busy = false;
+
+const $ = (id) => document.getElementById(id);
+const list = $('list'), drop = $('drop'), fileInput = $('file-input');
+
+function baseName(name) { return name.replace(/\.(pdf|jpe?g|png)$/i, '').trim(); }
+function kindOf(file) {
+  const n = file.name.toLowerCase();
+  if (file.type === 'application/pdf' || n.endsWith('.pdf')) return 'pdf';
+  if (file.type === 'image/jpeg' || /\.jpe?g$/.test(n)) return 'jpg';
+  if (file.type === 'image/png' || n.endsWith('.png')) return 'png';
+  return null;
+}
+
+async function addFiles(fileList) {
+  const files = Array.from(fileList);
+  if (!files.length) return;
+  const skipped = [];
+  for (const file of files) {
+    const kind = kindOf(file);
+    if (!kind) { skipped.push(file.name); continue; }
+    const item = { id: nextId++, file, name: file.name, header: baseName(file.name), kind, pages: null, doc: null, error: null, encrypted: false };
+    items.push(item);
+    render();
+    try {
+      const bytes = await file.arrayBuffer();
+      if (kind === 'pdf') {
+        const doc = await PDFDocument.load(bytes, { ignoreEncryption: true, updateMetadata: false });
+        item.doc = doc;
+        item.pages = doc.getPageCount();
+        item.encrypted = doc.isEncrypted;
+      } else {
+        item.bytes = bytes;
+        item.pages = 1;
+      }
+    } catch (e) {
+      item.error = "This file couldn't be read. It may be damaged or not really a PDF.";
+    }
+    render();
+  }
+  setStatus(skipped.length ? `Skipped ${skipped.length} file${skipped.length > 1 ? 's' : ''} that ${skipped.length > 1 ? "aren't" : "isn't"} a PDF, JPG, or PNG: ${skipped.join(', ')}` : '', skipped.length ? 'error' : '');
+}
+
+function setStatus(msg, cls) {
+  const s = $('status');
+  s.textContent = msg || 'Files stay on this device. Nothing is uploaded.';
+  s.className = 'status' + (cls ? ' ' + cls : '');
+}
+
+const ICONS = {
+  up: '<svg viewBox="0 0 24 24"><path d="M6 15l6-6 6 6"/></svg>',
+  down: '<svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>',
+  x: '<svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>',
+  grip: '<svg viewBox="0 0 14 22"><circle cx="4" cy="4" r="1.8"/><circle cx="10" cy="4" r="1.8"/><circle cx="4" cy="11" r="1.8"/><circle cx="10" cy="11" r="1.8"/><circle cx="4" cy="18" r="1.8"/><circle cx="10" cy="18" r="1.8"/></svg>'
+};
+
+function render() {
+  // keep focus on a header box while re-rendering
+  const active = document.activeElement;
+  const focusId = active && active.dataset && active.dataset.headerFor;
+  const selStart = focusId ? active.selectionStart : null, selEnd = focusId ? active.selectionEnd : null;
+
+  list.innerHTML = '';
+  let start = 1;
+  items.forEach((it, i) => {
+    const li = document.createElement('li');
+    li.className = 'item' + (it.error ? ' bad' : '');
+    li.dataset.id = it.id;
+    li.draggable = false;
+
+    const handle = document.createElement('div');
+    handle.className = 'handle';
+    handle.innerHTML = ICONS.grip;
+    handle.title = 'Drag to reorder';
+    handle.addEventListener('pointerdown', () => { li.draggable = true; });
+    li.addEventListener('dragend', () => { li.draggable = false; });
+
+    const body = document.createElement('div');
+    body.className = 'body';
+    const lab = document.createElement('label');
+    lab.className = 'label';
+    lab.htmlFor = 'header-' + it.id;
+    lab.textContent = 'Header';
+    const input = document.createElement('input');
+    input.className = 'header-input';
+    input.id = 'header-' + it.id;
+    input.type = 'text';
+    input.value = it.header;
+    input.placeholder = 'No header';
+    input.spellcheck = true;
+    input.autocomplete = 'off';
+    input.dataset.headerFor = it.id;
+    input.addEventListener('input', () => { it.header = input.value; });
+
+    const meta = document.createElement('div');
+    meta.className = 'meta';
+    const fname = document.createElement('span');
+    fname.textContent = it.name;
+    meta.appendChild(fname);
+    const pages = document.createElement('span');
+    pages.className = 'pages';
+    if (it.error) {
+      pages.textContent = '';
+    } else if (it.pages == null) {
+      pages.textContent = 'Reading\u2026';
+    } else {
+      pages.innerHTML = `${it.pages} page${it.pages === 1 ? '' : 's'} <span class="pill">header on page ${start}</span>`;
+    }
+    meta.appendChild(pages);
+    body.append(lab, input, meta);
+    if (it.error) {
+      const w = document.createElement('div'); w.className = 'warn'; w.textContent = it.error + ' It will be left out.'; body.appendChild(w);
+    } else if (it.encrypted) {
+      const w = document.createElement('div'); w.className = 'warn';
+      w.textContent = 'This PDF is password-protected. Its pages may come out blank. Try "Print \u2192 Save as PDF" on it first, then add the new copy.';
+      body.appendChild(w);
+    }
+    if (!it.error && it.pages) start += it.pages;
+
+    const actions = document.createElement('div');
+    actions.className = 'actions';
+    const up = iconBtn(ICONS.up, `Move ${it.name} up`, () => move(i, i - 1)); up.disabled = i === 0;
+    const down = iconBtn(ICONS.down, `Move ${it.name} down`, () => move(i, i + 1)); down.disabled = i === items.length - 1;
+    const rm = iconBtn(ICONS.x, `Remove ${it.name}`, () => { items.splice(i, 1); render(); setStatus(''); });
+    rm.classList.add('remove');
+    actions.append(up, down, rm);
+
+    li.append(handle, body, actions);
+    wireDrag(li, i);
+    list.appendChild(li);
+  });
+
+  const ready = items.filter(it => !it.error && it.pages != null);
+  const totalPages = ready.reduce((n, it) => n + it.pages, 0);
+  $('empty').hidden = items.length > 0;
+  $('reorder-note').hidden = items.length < 2;
+  $('clear-btn').hidden = items.length === 0;
+  $('totals').textContent = items.length ? `${items.length} file${items.length === 1 ? '' : 's'} \u00b7 ${totalPages} page${totalPages === 1 ? '' : 's'}` : '';
+  const loading = items.some(it => !it.error && it.pages == null);
+  $('combine-btn').disabled = busy || loading || ready.length === 0;
+
+  if (focusId) {
+    const el = document.getElementById('header-' + focusId);
+    if (el) { el.focus(); try { el.setSelectionRange(selStart, selEnd); } catch (_) {} }
+  }
+}
+
+function iconBtn(svg, label, fn) {
+  const b = document.createElement('button');
+  b.type = 'button'; b.className = 'icon-btn'; b.innerHTML = svg; b.setAttribute('aria-label', label); b.title = label.split(' ')[0] + (label.startsWith('Remove') ? '' : '');
+  b.addEventListener('click', fn);
+  return b;
+}
+
+function move(from, to) {
+  if (to < 0 || to >= items.length) return;
+  const [it] = items.splice(from, 1);
+  items.splice(to, 0, it);
+  render();
+  const btns = list.children[to]?.querySelectorAll('.icon-btn');
+  if (btns) (to > from ? btns[1] : btns[0]).focus();
+}
+
+let dragFrom = null;
+function wireDrag(li, index) {
+  li.addEventListener('dragstart', (e) => {
+    dragFrom = index; li.classList.add('dragging');
+    e.dataTransfer.effectAllowed = 'move';
+    try { e.dataTransfer.setData('text/plain', String(index)); } catch (_) {}
+  });
+  li.addEventListener('dragend', () => { li.classList.remove('dragging'); dragFrom = null; clearMarks(); });
+  li.addEventListener('dragover', (e) => {
+    if (dragFrom === null) return;
+    e.preventDefault();
+    clearMarks();
+    const r = li.getBoundingClientRect();
+    li.classList.add(e.clientY < r.top + r.height / 2 ? 'drop-before' : 'drop-after');
+  });
+  li.addEventListener('drop', (e) => {
+    if (dragFrom === null) return;
+    e.preventDefault(); e.stopPropagation();
+    const r = li.getBoundingClientRect();
+    let to = e.clientY < r.top + r.height / 2 ? index : index + 1;
+    if (dragFrom < to) to--;
+    const from = dragFrom; dragFrom = null; clearMarks();
+    if (from !== to) { const [it] = items.splice(from, 1); items.splice(to, 0, it); render(); }
+  });
+}
+function clearMarks() { list.querySelectorAll('.drop-before,.drop-after').forEach(n => n.classList.remove('drop-before', 'drop-after')); }
+
+// ---- adding files ----
+drop.addEventListener('click', () => fileInput.click());
+drop.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); fileInput.click(); } });
+fileInput.addEventListener('change', () => { addFiles(fileInput.files); fileInput.value = ''; });
+['dragenter', 'dragover'].forEach(t => document.addEventListener(t, (e) => {
+  if (dragFrom !== null) return;
+  if (e.dataTransfer && Array.from(e.dataTransfer.types || []).includes('Files')) { e.preventDefault(); drop.classList.add('over'); }
+}));
+document.addEventListener('dragleave', (e) => { if (!e.relatedTarget) drop.classList.remove('over'); });
+document.addEventListener('drop', (e) => {
+  if (dragFrom !== null) return;
+  if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length) { e.preventDefault(); drop.classList.remove('over'); addFiles(e.dataTransfer.files); }
+});
+$('clear-btn').addEventListener('click', () => { items = []; render(); setStatus(''); });
+
+// ---- building the combined PDF ----
+function safeText(font, text) {
+  let out = '';
+  for (const ch of text.normalize('NFC')) {
+    try { font.encodeText(ch); out += ch; }
+    catch (_) {
+      const plain = ch.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+      try { font.encodeText(plain); out += plain; } catch (_) { /* drop characters Arial can't print, like emoji */ }
+    }
+  }
+  return out.replace(/\s+/g, ' ').trim();
+}
+
+function fitText(font, text, maxWidth) {
+  let size = HEADER_SIZE;
+  let w = font.widthOfTextAtSize(text, size);
+  if (w > maxWidth) {
+    size = Math.max(MIN_SIZE, HEADER_SIZE * maxWidth / w);
+    w = font.widthOfTextAtSize(text, size);
+    while (w > maxWidth && text.length > 1) {
+      text = text.slice(0, -2).trimEnd() + '\u2026';
+      try { w = font.widthOfTextAtSize(text, size); } catch (_) { text = text.replace('\u2026', '...'); w = font.widthOfTextAtSize(text, size); }
+    }
+  }
+  return { text, size, width: w };
+}
+
+function drawHeader(page, font, raw) {
+  const text0 = safeText(font, raw);
+  if (!text0) return;
+  const box = page.getCropBox();
+  const rot = ((page.getRotation().angle % 360) + 360) % 360;
+  const sideways = rot === 90 || rot === 270;
+  const visW = sideways ? box.height : box.width;
+  const { text, size, width } = fitText(font, text0, visW - 2 * SIDE_MARGIN);
+  const drop = HEADER_TOP + CAP_HEIGHT * size;   // top edge to baseline
+  const { x: x0, y: y0, width: w, height: h } = box;
+  let x, y, angle;
+  if (rot === 0)        { x = x0 + (w - width) / 2; y = y0 + h - drop; angle = 0; }
+  else if (rot === 90)  { x = x0 + drop;           y = y0 + (h - width) / 2; angle = 90; }
+  else if (rot === 180) { x = x0 + (w + width) / 2; y = y0 + drop; angle = 180; }
+  else                  { x = x0 + w - drop;       y = y0 + (h + width) / 2; angle = 270; }
+  page.drawText(text, { x, y, size, font, color: rgb(0, 0, 0), rotate: degrees(angle) });
+}
+
+async function buildCombined(list) {
+  const out = await PDFDocument.create();
+  const font = await out.embedFont(StandardFonts.HelveticaBold);
+  for (const it of list) {
+    if (it.error || it.pages == null) continue;
+    let first;
+    if (it.kind === 'pdf') {
+      const pages = await out.copyPages(it.doc, it.doc.getPageIndices());
+      pages.forEach((p, i) => { out.addPage(p); if (i === 0) first = p; });
+    } else {
+      const img = it.kind === 'png' ? await out.embedPng(it.bytes) : await out.embedJpg(it.bytes);
+      const landscape = img.width > img.height;
+      const [pw, ph] = landscape ? [LETTER[1], LETTER[0]] : LETTER;
+      const page = out.addPage([pw, ph]);
+      const top = 72, margin = 36;   // leave room under the header
+      const maxW = pw - 2 * margin, maxH = ph - top - margin;
+      const s = Math.min(maxW / img.width, maxH / img.height, 1);
+      const dw = img.width * s, dh = img.height * s;
+      page.drawImage(img, { x: (pw - dw) / 2, y: margin + (maxH - dh) / 2, width: dw, height: dh });
+      first = page;
+    }
+    if (first && it.header.trim()) drawHeader(first, font, it.header);
+  }
+  out.setTitle(outputName().replace(/\.pdf$/i, ''));
+  out.setProducer('Dr. Staub / Claude PDF Combiner');
+  return out.save();
+}
+
+function outputName() {
+  let n = $('out-name').value.replace(/[\\/:*?"<>|]+/g, '').trim() || 'Combined';
+  if (!/\.pdf$/i.test(n)) n += '.pdf';
+  return n;
+}
+
+// ---- saving ----
+let downloadsPromise = (window.claude && typeof window.claude.use === 'function')
+  ? window.claude.use('downloads').catch(() => null)
+  : Promise.resolve(null);
+
+async function saveFile(bytes, filename) {
+  const downloads = await downloadsPromise;
+  if (downloads) {
+    try {
+      await downloads.save({ filename, data: new Blob([bytes], { type: 'application/pdf' }) });
+      return 'saved';
+    } catch (e) {
+      if (e && e.code === 'declined') return 'declined';
+      if (e && e.code === 'rate_limited') return 'busy';
+      throw e;
+    }
+  }
+  // Outside the Claude viewer (opened as a plain file), fall back to a normal browser download.
+  const url = URL.createObjectURL(new Blob([bytes], { type: 'application/pdf' }));
+  const a = document.createElement('a');
+  a.href = url; a.download = filename; document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 60000);
+  return 'saved';
+}
+
+$('combine-btn').addEventListener('click', async () => {
+  if (busy) return;
+  busy = true; render();
+  setStatus('Combining\u2026');
+  try {
+    const bytes = await buildCombined(items);
+    const name = outputName();
+    const result = await saveFile(bytes, name);
+    if (result === 'saved') setStatus(`Done. ${name} is ready in your downloads.`, 'good');
+    else if (result === 'declined') setStatus('Download canceled. Click Combine & Download to try again.');
+    else setStatus('A save window is already open. Finish or close it, then try again.');
+  } catch (e) {
+    console.error(e);
+    setStatus("Something went wrong while combining. Remove any file marked in red and try again. If it keeps failing, open that PDF and use Print \u2192 Save as PDF to make a clean copy.", 'error');
+  } finally {
+    busy = false; render();
+  }
+});
+
+render();
+</script>
+</body>
+</html>
